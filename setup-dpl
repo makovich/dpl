@@ -1,0 +1,92 @@
+#!/bin/sh
+set -e
+
+PREFIX="/usr/local/bin"
+CONFIG="/etc/lbu/lbu.conf"
+
+if [ $(id -u) -ne 0 ]; then
+  echo 'Should run as root.'
+  exit 1
+fi
+
+usage() {
+  exec 1>&2
+  cat << EOF
+USAGE:
+
+  setup-dpl [-fh] [ <user> ]
+
+ARGS:
+  <user>   Owner of \`dpl\`
+
+OPTIONS:
+  -f   Force reinstall
+  -h   This help message
+
+EOF
+}
+
+exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+setup_dpl() {
+  [ "${DO_DPL}" ] || return 0
+
+  [ "${FORCE}" ] && rm -f "${PREFIX}/dpl"
+
+  if exists dpl; then
+    echo "dpl already installed; use -f option."
+    return 0
+  fi
+
+  echo "Compiling dpl..."
+  apk add \
+    --virtual .compile-dpl \
+    --no-cache \
+    --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing \
+    musl-dev tcc
+  tcc -o dpl dpl.c
+  apk del .compile-dpl
+
+  echo -n "Installing dpl... "
+  install -o root -g "${OWNER}" dpl "${PREFIX}"
+  chmod 4550 "${PREFIX}/dpl"
+  echo "ok"
+
+  [ "${FORCE}" ] && return 0
+
+  echo "Updating ${CONFIG}..."
+  printf "\n%s\n" "# Non \`lbu\` specific variable used with \`dpl\`" >> "${CONFIG}"
+  printf "# DPL_REV=%s\n"   "HEAD"            >> "${CONFIG}"
+  printf "# DPL_DEST=%s\n"  "/"               >> "${CONFIG}"
+  printf "# DPL_PATHS=%s\n" "/etc:/perms.bkp" >> "${CONFIG}"
+}
+
+while getopts ":dfh" o; do
+  case "${o}" in
+    d) DO_INSTALL=true && DO_DPL=true;;
+    f) FORCE=true;;
+    h) usage && exit 0;;
+    *) usage && exit 1;;
+  esac
+done
+shift $((OPTIND-1))
+
+[ -z "${DO_INSTALL}" ] && usage && exit 1
+
+if [ -z "$1" ]; then
+  echo -n "Enter \`dpl\` owner [root]: "
+  read OWNER
+else
+  OWNER="$1"
+  shift || :
+fi
+
+if [ "${OWNER}" ]; then
+  id -un "${OWNER}" >/dev/null
+else
+  OWNER="root"
+fi
+
+setup_dpl
